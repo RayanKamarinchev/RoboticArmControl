@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Servo Controller</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Arm Controller</h1>
+        </div>
+
+        <div class="connection-panel">
+            <div class="connection-controls">
+                <div class="form-group">
+                    <label for="portSelect">COM Port</label>
+                    <select id="portSelect">
+                        <option value="">Select Port...</option>
+                    </select>
+                </div>
+
+                <button class="btn-refresh" onclick="refreshPorts()">Refresh</button>
+                <button class="btn-connect" onclick="connect()">Connect</button>
+                <button class="btn-disconnect" onclick="disconnect()">Disconnect</button>
+
+                <div class="status disconnected" id="status">Disconnected</div>
+            </div>
+        </div>
+
+        <div class="message" id="message"></div>
+
+        <div class="serial-monitor">
+            <div class="serial-header">
+                <span class="serial-title">Serial Monitor</span>
+                <button class="btn-clear" onclick="clearSerialOutput()">Clear</button>
+            </div>
+            <div class="serial-output" id="serialOutput">
+                <div class="serial-line">
+                    <span class="serial-timestamp">[System]</span>
+                    <span>Waiting for connection...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="servo-grid" id="servoGrid">
+            <!-- Servo cards will be dynamically generated -->
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
