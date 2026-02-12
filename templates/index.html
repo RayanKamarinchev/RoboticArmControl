@@ -7,9 +7,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
+     <div class="container">
         <div class="header">
-            <h1>Arm Controller</h1>
+            <div class="mode-indicator" id="modeIndicator">HTTP MODE</div>
+            <h1>Robotic Arm Controller</h1>
         </div>
 
         <div class="connection-panel">
@@ -31,21 +32,142 @@
 
         <div class="message" id="message"></div>
 
-        <div class="serial-monitor">
-            <div class="serial-header">
-                <span class="serial-title">Serial Monitor</span>
-                <button class="btn-clear" onclick="clearSerialOutput()">Clear</button>
-            </div>
-            <div class="serial-output" id="serialOutput">
-                <div class="serial-line">
-                    <span class="serial-timestamp">[System]</span>
-                    <span>Waiting for connection...</span>
+        <div class="main-content">
+            <!-- Position and Servo Controls -->
+            <div class="section-container">
+                <div class="section-title">Position Control</div>
+                <div class="position-grid">
+                    <!-- Arm Frame Position -->
+                    <div class="position-section">
+                        <div class="position-header">Arm Frame Position</div>
+                        <div class="coord-display">
+                            <div class="coord-box">
+                                <div class="coord-label">X (mm)</div>
+                                <div class="coord-value" id="armPosX">0</div>
+                            </div>
+                            <div class="coord-box">
+                                <div class="coord-label">Y (mm)</div>
+                                <div class="coord-value" id="armPosY">0</div>
+                            </div>
+                            <div class="coord-box">
+                                <div class="coord-label">Z (mm)</div>
+                                <div class="coord-value" id="armPosZ">0</div>
+                            </div>
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label">
+                                <span>X Axis</span>
+                                <span class="slider-value" id="armTargetX">0 mm</span>
+                            </div>
+                            <input type="range" min="-300" max="300" value="0" 
+                                   oninput="updateArmCoord('x', this.value)">
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label">
+                                <span>Y Axis</span>
+                                <span class="slider-value" id="armTargetY">0 mm</span>
+                            </div>
+                            <input type="range" min="-300" max="300" value="0" 
+                                   oninput="updateArmCoord('y', this.value)">
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label">
+                                <span>Z Axis</span>
+                                <span class="slider-value" id="armTargetZ">0 mm</span>
+                            </div>
+                            <input type="range" min="0" max="400" value="0" 
+                                   oninput="updateArmCoord('z', this.value)">
+                        </div>
+                    </div>
+
+                    <!-- World Frame Position -->
+                    <div class="position-section" id="worldPositionSection">
+                        <div class="position-header">World Frame Position</div>
+                        <div class="coord-display">
+                            <div class="coord-box">
+                                <div class="coord-label">X (mm)</div>
+                                <div class="coord-value" id="worldPosX">0</div>
+                            </div>
+                            <div class="coord-box">
+                                <div class="coord-label">Y (mm)</div>
+                                <div class="coord-value" id="worldPosY">0</div>
+                            </div>
+                            <div class="coord-box">
+                                <div class="coord-label">Z (mm)</div>
+                                <div class="coord-value" id="worldPosZ">0</div>
+                            </div>
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label">
+                                <span>X Axis</span>
+                                <span class="slider-value" id="worldTargetX">0 mm</span>
+                            </div>
+                            <input type="range" min="-500" max="500" value="0" 
+                                   oninput="updateWorldCoord('x', this.value)">
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label">
+                                <span>Y Axis</span>
+                                <span class="slider-value" id="worldTargetY">0 mm</span>
+                            </div>
+                            <input type="range" min="-500" max="500" value="0" 
+                                   oninput="updateWorldCoord('y', this.value)">
+                        </div>
+                        <div class="slider-group">
+                            <div class="slider-label">
+                                <span>Z Axis</span>
+                                <span class="slider-value" id="worldTargetZ">0 mm</span>
+                            </div>
+                            <input type="range" min="0" max="500" value="0" 
+                                   oninput="updateWorldCoord('z', this.value)">
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <div class="servo-grid" id="servoGrid">
-            <!-- Servo cards will be dynamically generated -->
+            <!-- Servo Angles -->
+            <div class="section-container">
+                <div class="section-title">Servo Angles</div>
+                <div class="servo-grid" id="servoGrid">
+                    <!-- Servo cards will be dynamically generated -->
+                </div>
+            </div>
+
+            <!-- Camera and Detected Objects -->
+            <div class="section-container">
+                <div class="section-title">Vision System</div>
+                <div class="vision-grid">
+                    <div>
+                        <div class="position-header" style="margin-bottom: 10px;">Camera Feed</div>
+                        <div class="image-display" id="imageDisplay">
+                            <div class="no-image">No image available</div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="position-header" style="margin-bottom: 10px;">Detected Objects</div>
+                        <div class="boxes-list" id="boxesList">
+                            <div class="no-boxes">No objects detected</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Serial Monitor -->
+            <div class="section-container">
+                <div class="section-title">Serial Monitor</div>
+                <div class="serial-monitor">
+                    <div class="serial-header">
+                        <span class="serial-title">Console Output</span>
+                        <button class="btn-clear" onclick="clearSerialOutput()">Clear</button>
+                    </div>
+                    <div class="serial-output" id="serialOutput">
+                        <div class="serial-line">
+                            <span class="serial-timestamp">[System]</span>
+                            <span>Waiting for connection...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

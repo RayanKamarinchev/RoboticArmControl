@@ -1,5 +1,9 @@
 let servos = []
 let serialPollInterval = null;
+let selectedBoxId = null;
+let worldCoordDebounce = null;
+let armCoordDebounce = null;
+let worldPositionEnabled = false;
 
 function addSerialLine(text) {
     const output = document.getElementById('serialOutput');
@@ -16,6 +20,151 @@ function clearSerialOutput() {
     output.innerHTML = '<div class="serial-line"><span class="serial-timestamp">[System]</span><span>Serial monitor cleared</span></div>';
 }
 
+function updateModeIndicator(mode) {
+    const indicator = document.getElementById('modeIndicator');
+    currentMode = mode;
+    if (mode === 'http') {
+        indicator.textContent = 'HTTP MODE';
+        indicator.className = 'mode-indicator mode-http';
+    } else {
+        indicator.textContent = 'SERIAL MODE';
+        indicator.className = 'mode-indicator mode-serial';
+    }
+}
+
+function enableWorldPosition() {
+    worldPositionEnabled = true;
+    document.getElementById('worldPositionSection').classList.remove('disabled');
+}
+
+function updateArmPosition(position) {
+    document.getElementById('armPosX').textContent = position.x.toFixed(1);
+    document.getElementById('armPosY').textContent = position.y.toFixed(1);
+    document.getElementById('armPosZ').textContent = position.z.toFixed(1);
+}
+
+function updateWorldPosition(position) {
+    document.getElementById('worldPosX').textContent = position.x.toFixed(1);
+    document.getElementById('worldPosY').textContent = position.y.toFixed(1);
+    document.getElementById('worldPosZ').textContent = position.z.toFixed(1);
+}
+
+function updateImage(imageData) {
+    const display = document.getElementById('imageDisplay');
+    if (imageData) {
+        display.innerHTML = `<img src="data:image/jpeg;base64,${imageData}" alt="Camera feed">`;
+        enableWorldPosition();
+    } else {
+        display.innerHTML = '<div class="no-image">No image available</div>';
+    }
+}
+
+function updateBoxesList(boxes) {
+    const list = document.getElementById('boxesList');
+    if (!boxes || boxes.length === 0) {
+        list.innerHTML = '<div class="no-boxes">No objects detected</div>';
+        return;
+    }
+
+    list.innerHTML = boxes.map(box => `
+        <div class="box-item ${selectedBoxId === box.id ? 'selected' : ''}" onclick="selectBox('${box.id}')">
+            <div class="box-header">
+                <span class="box-id">Box ${box.id}</span>
+                <button class="btn-grab" onclick="grabBox('${box.id}'); event.stopPropagation();">Grab</button>
+            </div>
+            <div class="box-details">
+                <div>Position: (${box.x.toFixed(1)}, ${box.y.toFixed(1)}, ${box.z.toFixed(1)}) mm</div>
+                <div>Size: ${box.width.toFixed(1)} × ${box.height.toFixed(1)} × ${box.depth.toFixed(1)} mm</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function selectBox(boxId) {
+    selectedBoxId = boxId;
+    updateBoxesList(window.lastBoxes || []);
+}
+
+function grabBox(boxId) {
+    fetch('/api/grab_box', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({box_id: boxId})
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            showMessage(`Grabbing box ${boxId}...`, 'success');
+            addSerialLine(`Command sent: Grab box ${boxId}`);
+        } else {
+            showMessage('Error: ' + data.error, 'error');
+        }
+    });
+}
+
+function updateArmCoord(axis, value) {
+    document.getElementById(`armTarget${axis.toUpperCase()}`).textContent = value + ' mm';
+    
+    // Debounce for HTTP mode
+    if (currentMode === 'http') {
+        clearTimeout(armCoordDebounce);
+        armCoordDebounce = setTimeout(() => {
+            sendArmPosition();
+        }, 2000);
+    } else {
+        sendArmPosition();
+    }
+}
+
+function updateWorldCoord(axis, value) {
+    document.getElementById(`worldTarget${axis.toUpperCase()}`).textContent = value + ' mm';
+    
+    if (currentMode === 'http') {
+        clearTimeout(worldCoordDebounce);
+        worldCoordDebounce = setTimeout(() => {
+            sendWorldPosition();
+        }, 2000);
+    } else {
+        sendWorldPosition();
+    }
+}
+
+function sendArmPosition() {
+    const x = parseInt(document.getElementById('armTargetX').textContent);
+    const y = parseInt(document.getElementById('armTargetY').textContent);
+    const z = parseInt(document.getElementById('armTargetZ').textContent);
+
+    fetch('/api/world_position', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({x, y, z, frame: 'arm'})
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            addSerialLine(`Arm position set: (${x}, ${y}, ${z})`);
+        }
+    });
+}
+
+function sendWorldPosition() {
+    const x = parseInt(document.getElementById('worldTargetX').textContent);
+    const y = parseInt(document.getElementById('worldTargetY').textContent);
+    const z = parseInt(document.getElementById('worldTargetZ').textContent);
+
+    fetch('/api/world_position', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({x, y, z, frame: 'world'})
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            addSerialLine(`World position set: (${x}, ${y}, ${z})`);
+        }
+    });
+}
+
 function pollSerialData() {
     fetch('/api/serial_read')
         .then(res => res.json())
@@ -23,15 +172,50 @@ function pollSerialData() {
             if (data.success && data.data.length > 0) {
                 data.data.forEach(line => addSerialLine(line));
             }
-        })
-        .catch(err => console.error('Serial read error:', err));
+        });
+}
+
+function pollArmData() {
+    fetch('/api/position')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                updateArmPosition(data.position);
+            }
+        });
+
+    fetch('/api/boxes')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                window.lastBoxes = data.boxes;
+                updateBoxesList(data.boxes);
+            }
+        });
+
+    fetch('/api/image')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.image) {
+                updateImage(data.image);
+            }
+        });
+
+    fetch('/api/mode')
+        .then(res => res.json())
+        .then(data => {
+            updateModeIndicator(data.mode);
+        });
 }
 
 function startSerialPolling() {
     if (serialPollInterval) {
         clearInterval(serialPollInterval);
     }
-    serialPollInterval = setInterval(pollSerialData, 100);
+    serialPollInterval = setInterval(() => {
+        pollSerialData();
+        pollArmData();
+    }, 100);
 }
 
 function stopSerialPolling() {
@@ -60,6 +244,7 @@ function updateStatus() {
                 status.textContent = 'Disconnected';
                 status.className = 'status disconnected';
             }
+            updateModeIndicator(data.mode);
         });
 }
 
@@ -170,6 +355,18 @@ function disconnect() {
 
 function updateServo(id, angle) {
     document.getElementById(`value${id}`).textContent = `${angle}°`;
+    
+    if (currentMode === 'serial') {
+        sendServoCommand(id, angle);
+    } else {
+        clearTimeout(window[`servoDebounce${id}`]);
+        window[`servoDebounce${id}`] = setTimeout(() => {
+            sendServoCommand(id, angle);
+        }, 2000);
+    }
+}
+
+function sendServoCommand(id, angle) {
     fetch('/api/servo', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -184,6 +381,11 @@ function updateServo(id, angle) {
 }
 
 window.onload = function() {
+    loadServos();
     refreshPorts();
     updateStatus();
+    startSerialPolling();
+    
+    // Disable world position initially
+    document.getElementById('worldPositionSection').classList.add('disabled');
 };
