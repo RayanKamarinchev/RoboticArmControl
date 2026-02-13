@@ -34,29 +34,6 @@ body {
     color: #333;
 }
 
-.mode-indicator {
-    position: absolute;
-    top: 20px;
-    right: 30px;
-    padding: 8px 20px;
-    border-radius: 4px;
-    font-weight: 600;
-    font-size: 0.85em;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.mode-http {
-    background: #ff9800;
-    color: white;
-    box-shadow: 0 2px 8px rgba(255, 152, 0, 0.3);
-}
-
-.mode-serial {
-    background: #4caf50;
-    color: white;
-}
-
 .connection-panel {
     background: #fafafa;
     padding: 20px 30px;
@@ -185,10 +162,18 @@ button {
     border-bottom: 2px solid #41a5b9;
 }
 
-.position-grid {
+/* Top Section: Arm and World Position side by side */
+.top-section {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 30px;
+    margin-bottom: 30px;
+}
+
+/* Bottom Section: Servo Angles */
+.bottom-section {
+    border-top: 1px solid #e0e0e0;
+    padding-top: 25px;
 }
 
 .position-section {
@@ -206,14 +191,24 @@ button {
     font-weight: 600;
     color: #333;
     font-size: 0.95em;
-    margin-bottom: 5px;
+    margin-bottom: 10px;
 }
 
-.coord-display {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
+/* Position content with sliders on left, coords on right */
+.control-row {
+    display: flex;
+    gap: 20px;
+    align-items: center;
     margin-bottom: 15px;
+}
+
+.control-row .slider-group {
+    flex: 1;
+}
+
+.control-row .coord-box {
+    min-width: 120px;
+    flex-shrink: 0;
 }
 
 .coord-box {
@@ -294,6 +289,11 @@ input[type="range"]::-moz-range-thumb {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 20px;
+}
+
+.servo-grid.disabled {
+    opacity: 0.5;
+    pointer-events: none;
 }
 
 .servo-card {

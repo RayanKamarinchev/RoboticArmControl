@@ -7,7 +7,7 @@ import cv2.aruco as aruco
 
 BOX_CODE_SIZE = 0.03
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, 'cv/runs/segment/train14/weights/best.pt')
+MODEL_DIR = os.path.join(BASE_DIR, 'model/best.pt')
 
 class Box:
     def __init__(self, id, grab_point, width, length, height):
@@ -198,6 +198,9 @@ def get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rve
     model = YOLO(MODEL_DIR)
     img, new_camera_matrix = undistort_img(img, camera_matrix, dist_coeffs)
     result = model.predict(source=img)[0]
+    
+    if(result.masks is None):
+        return []
 
     masks = result.masks.data.cpu().numpy()
     masks = rescale_masks(masks, img.shape)

@@ -1,15 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Servo Controller</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
+
 <body>
-     <div class="container">
+    <div class="container">
         <div class="header">
-            <div class="mode-indicator" id="modeIndicator">HTTP MODE</div>
             <h1>Robotic Arm Controller</h1>
         </div>
 
@@ -25,6 +26,7 @@
                 <button class="btn-refresh" onclick="refreshPorts()">Refresh</button>
                 <button class="btn-connect" onclick="connect()">Connect</button>
                 <button class="btn-disconnect" onclick="disconnect()">Disconnect</button>
+                <button class="btn-photo" onclick="takePhoto()">Take Photo</button>
 
                 <div class="status disconnected" id="status">Disconnected</div>
             </div>
@@ -36,104 +38,122 @@
             <!-- Position and Servo Controls -->
             <div class="section-container">
                 <div class="section-title">Position Control</div>
-                <div class="position-grid">
+
+                <!-- Top Section: Arm and World Position -->
+                <div class="top-section">
                     <!-- Arm Frame Position -->
-                    <div class="position-section">
+                    <div class="position-section" id="armPositionSection">
                         <div class="position-header">Arm Frame Position</div>
-                        <div class="coord-display">
+
+                        <div class="control-row">
+                            <div class="slider-group">
+                                <div class="slider-label">
+                                    <span>X Axis</span>
+                                    <!-- <span class="slider-value" id="armTargetX">0 mm</span> -->
+                                </div>
+                                <input id="armPosValueX" type="range" min="-300" max="300" value="0"
+                                    oninput="updateArmCoord('x', this.value)">
+                            </div>
                             <div class="coord-box">
                                 <div class="coord-label">X (mm)</div>
                                 <div class="coord-value" id="armPosX">0</div>
                             </div>
+                        </div>
+
+                        <div class="control-row">
+                            <div class="slider-group">
+                                <div class="slider-label">
+                                    <span>Y Axis</span>
+                                    <!-- <span class="slider-value" id="armTargetY">0 mm</span> -->
+                                </div>
+                                <input id="armPosValueY" type="range" min="-300" max="300" value="0"
+                                    oninput="updateArmCoord('y', this.value)">
+                            </div>
                             <div class="coord-box">
                                 <div class="coord-label">Y (mm)</div>
                                 <div class="coord-value" id="armPosY">0</div>
+                            </div>
+                        </div>
+
+                        <div class="control-row">
+                            <div class="slider-group">
+                                <div class="slider-label">
+                                    <span>Z Axis</span>
+                                    <!-- <span class="slider-value" id="armTargetZ">0 mm</span> -->
+                                </div>
+                                <input id="armPosValueZ" type="range" min="0" max="400" value="0"
+                                    oninput="updateArmCoord('z', this.value)">
                             </div>
                             <div class="coord-box">
                                 <div class="coord-label">Z (mm)</div>
                                 <div class="coord-value" id="armPosZ">0</div>
                             </div>
                         </div>
-                        <div class="slider-group">
-                            <div class="slider-label">
-                                <span>X Axis</span>
-                                <span class="slider-value" id="armTargetX">0 mm</span>
-                            </div>
-                            <input type="range" min="-300" max="300" value="0" 
-                                   oninput="updateArmCoord('x', this.value)">
-                        </div>
-                        <div class="slider-group">
-                            <div class="slider-label">
-                                <span>Y Axis</span>
-                                <span class="slider-value" id="armTargetY">0 mm</span>
-                            </div>
-                            <input type="range" min="-300" max="300" value="0" 
-                                   oninput="updateArmCoord('y', this.value)">
-                        </div>
-                        <div class="slider-group">
-                            <div class="slider-label">
-                                <span>Z Axis</span>
-                                <span class="slider-value" id="armTargetZ">0 mm</span>
-                            </div>
-                            <input type="range" min="0" max="400" value="0" 
-                                   oninput="updateArmCoord('z', this.value)">
-                        </div>
                     </div>
 
                     <!-- World Frame Position -->
                     <div class="position-section" id="worldPositionSection">
                         <div class="position-header">World Frame Position</div>
-                        <div class="coord-display">
+
+                        <div class="control-row">
+                            <div class="slider-group">
+                                <div class="slider-label">
+                                    <span>X Axis</span>
+                                    <!-- <span class="slider-value" id="worldTargetX">0 mm</span> -->
+                                </div>
+                                <input id="worldPosValueX" type="range" min="-500" max="500" value="0"
+                                    oninput="updateWorldCoord('x', this.value)">
+                            </div>
                             <div class="coord-box">
                                 <div class="coord-label">X (mm)</div>
                                 <div class="coord-value" id="worldPosX">0</div>
                             </div>
+                        </div>
+
+                        <div class="control-row">
+                            <div class="slider-group">
+                                <div class="slider-label">
+                                    <span>Y Axis</span>
+                                    <!-- <span class="slider-value" id="worldTargetY">0 mm</span> -->
+                                </div>
+                                <input id="worldPosValueY" type="range" min="-500" max="500" value="0"
+                                    oninput="updateWorldCoord('y', this.value)">
+                            </div>
                             <div class="coord-box">
                                 <div class="coord-label">Y (mm)</div>
                                 <div class="coord-value" id="worldPosY">0</div>
+                            </div>
+                        </div>
+
+                        <div class="control-row">
+                            <div class="slider-group">
+                                <div class="slider-label">
+                                    <span>Z Axis</span>
+                                    <!-- <span class="slider-value" id="worldTargetZ">0 mm</span> -->
+                                </div>
+                                <input id="worldPosValueZ" type="range" min="0" max="500" value="0"
+                                    oninput="updateWorldCoord('z', this.value)">
                             </div>
                             <div class="coord-box">
                                 <div class="coord-label">Z (mm)</div>
                                 <div class="coord-value" id="worldPosZ">0</div>
                             </div>
                         </div>
-                        <div class="slider-group">
-                            <div class="slider-label">
-                                <span>X Axis</span>
-                                <span class="slider-value" id="worldTargetX">0 mm</span>
-                            </div>
-                            <input type="range" min="-500" max="500" value="0" 
-                                   oninput="updateWorldCoord('x', this.value)">
-                        </div>
-                        <div class="slider-group">
-                            <div class="slider-label">
-                                <span>Y Axis</span>
-                                <span class="slider-value" id="worldTargetY">0 mm</span>
-                            </div>
-                            <input type="range" min="-500" max="500" value="0" 
-                                   oninput="updateWorldCoord('y', this.value)">
-                        </div>
-                        <div class="slider-group">
-                            <div class="slider-label">
-                                <span>Z Axis</span>
-                                <span class="slider-value" id="worldTargetZ">0 mm</span>
-                            </div>
-                            <input type="range" min="0" max="500" value="0" 
-                                   oninput="updateWorldCoord('z', this.value)">
+                    </div>
+                </div>
+
+                <!-- Bottom Section: Servo Angles -->
+                <div class="bottom-section">
+                    <div class="" id="servoSection">
+                        <div class="position-header">Servo Angles</div>
+                        <div class="servo-grid" id="servoGrid">
+                            <!-- Servo cards dynamically generated -->
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Servo Angles -->
-            <div class="section-container">
-                <div class="section-title">Servo Angles</div>
-                <div class="servo-grid" id="servoGrid">
-                    <!-- Servo cards will be dynamically generated -->
-                </div>
-            </div>
-
-            <!-- Camera and Detected Objects -->
+            <!-- Camera and Detected Boxes -->
             <div class="section-container">
                 <div class="section-title">Vision System</div>
                 <div class="vision-grid">
@@ -173,4 +193,5 @@
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
+
 </html>

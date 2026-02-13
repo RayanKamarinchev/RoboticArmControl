@@ -4,15 +4,36 @@ import serial
 import serial.tools.list_ports
 import time
 import os
-from datetime import datetime
-import io
 import numpy as np
-import json
+import socket
+import logging
 
 from src.box_detection import get_box_coordinates, Box
 from src.camera_utils import decode_image, get_camera_position, get_marker_positions, get_camera_matrix_and_dist_coeffs
-from src.movement import get_move_angles, get_initial_angles, conv_camera_coords_to_gripper_coords, get_gripper_coords_and_cam_rotation_from_arm, transform_arm_to_space_coords, transform_space_to_arm_coords
+from src.movement import (get_move_angles, get_initial_angles,
+                          conv_camera_coords_to_gripper_coords, get_gripper_coords_and_cam_rotation_from_arm,
+                          transform_arm_to_world_coords, transform_world_to_arm_coords,
+                          get_translation, world_to_servo_angles, servo_to_world_angle)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE" #TODO
+
+class IgnoreEndpointsFilter(logging.Filter):
+    def __init__(self, ignored_paths):
+        super().__init__()
+        self.ignored_paths = ignored_paths
+
+    def filter(self, record):
+        if record.levelno >= logging.ERROR:
+            return True
+
+        message = record.getMessage()
+
+        return not any(path in message for path in self.ignored_paths)
+
+
+ignored_endpoints = ["/api/serial_read"]
+
+log = logging.getLogger("werkzeug")
+log.addFilter(IgnoreEndpointsFilter(ignored_endpoints))
 
 app = Flask(__name__)
 
@@ -35,11 +56,14 @@ counter = 0
 ser = None
 current_port = None
 translation = None
+system_angle = None
 
-current_gripper_position_in_world = None
-current_gripper_position_in_arm = get_gripper_coords_and_cam_rotation_from_arm(get_initial_angles())
+world_angles = get_initial_angles()
+current_gripper_position_in_world = np.zeros(3)
+current_gripper_position_in_arm, _ = get_gripper_coords_and_cam_rotation_from_arm(world_angles)
 detected_boxes = []
-latest_image = None
+latest_img = None
+server_ip = None
 
 class Servo:
     def __init__(self, servo_id, name, min_angle, max_angle, initial_angle):
@@ -65,13 +89,43 @@ servos = [Servo(0, "Servo Base", 0, 180, 30),
           Servo(4, "Servo Head Joint", 0, 180, 6), 
           Servo(5, "Servo Gripper", 90, 180, 160)]
 
+def move_to_position(target_coords, is_in_world_frame = True):
+    global current_gripper_position_in_world, current_gripper_position_in_arm, translation, system_angle, world_angles
+    
+    if(is_in_world_frame):
+        current_gripper_position_in_world = np.array(target_coords)
+        if(translation is not None):
+            current_gripper_position_in_arm = transform_world_to_arm_coords(current_gripper_position_in_world, system_angle, translation)
+    else:
+        current_gripper_position_in_arm = np.array(target_coords)
+        if(translation is not None):
+            current_gripper_position_in_world = transform_arm_to_world_coords(current_gripper_position_in_arm, system_angle, translation)
+    
+    print("World angles before: ", world_angles)
+    world_angles = get_move_angles(np.array(target_coords), translation, system_angle, world_angles, is_in_world_frame)
+    print("World angles after: ", world_angles)
+    servo_angles = world_to_servo_angles(world_angles)
+    if ser and ser.is_open:
+        command = f"P{':'.join(map(str, servo_angles))}\n"
+        print(command)
+        ser.write(command.encode())
+        
+def get_local_ip():
+    global server_ip
+    if server_ip is None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            server_ip = s.getsockname()[0]
+        finally:
+            s.close()
+            
+    print("Server ip: ", server_ip)
+    return server_ip
+
 @app.route('/get_position', methods=['POST'])
 def receive_image():
-    global flag
-    global current_gripper_position_in_world
-    global current_gripper_position_in_arm
-    global detected_boxes
-    global translation
+    global flag, current_gripper_position_in_world, current_gripper_position_in_arm, detected_boxes, translation, system_angle, latest_img
     
     if 'imageFile' not in request.files:
         print("FILES:", request.files)
@@ -85,15 +139,20 @@ def receive_image():
     cv2.imwrite(LATEST_IMAGE_PATH, img)
     
     _, camera_position, coordinate_systems_angle, R, rvec, tvec = get_camera_position(img, get_marker_positions(MARKER_SIZE, MARKER_SPACING), MARKER_SIZE)
+
+    print("Coordinate systems angle: ", np.degrees(coordinate_systems_angle))
+    current_gripper_position_in_world = conv_camera_coords_to_gripper_coords(camera_position, world_angles, coordinate_systems_angle)
+    arm_angle = np.arctan2(current_gripper_position_in_arm[1], current_gripper_position_in_arm[0])
+    print("Arm angle: ", np.degrees(arm_angle))
+    system_angle = coordinate_systems_angle-arm_angle
     
-    current_gripper_position_in_world = conv_camera_coords_to_gripper_coords(camera_position, get_initial_angles(), coordinate_systems_angle)
+    translation = get_translation(current_gripper_position_in_world, current_gripper_position_in_arm, system_angle)
     
-    # angles = get_move_angles(camera_position, target_position, get_initial_angles(), coordinate_systems_angle)
     camera_matrix, dist_coeffs = get_camera_matrix_and_dist_coeffs()
     
     detected_boxes = get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rvec, tvec)
-    # angles = get_move_angles(camera_position, target_position, get_initial_angles(), coordinate_systems_angle)
-    
+    print(detected_boxes)
+    latest_img = img
     flag = True
     
     return jsonify({"message": "OK"}), 200
@@ -104,7 +163,19 @@ def get_available_ports():
 
 @app.route('/')
 def index():
+    get_local_ip()
     return render_template('index.html')
+
+@app.route('/api/cam', methods=['GET'])
+def get_image():
+    print("here")
+    print(get_local_ip())
+    if ser and ser.is_open:
+        command = f"take_photo:{get_local_ip()}\n"
+        print(command)
+        ser.write(command.encode())
+    return jsonify({'success': True})
+
 
 @app.route('/api/ports', methods=['GET'])
 def get_ports():
@@ -118,27 +189,64 @@ def get_ports():
 def get_servos():
     return jsonify({'success': True, 'servos': [s.to_dict() for s in servos]})
 
-@app.route('/api/mode', methods=['GET'])
-def get_mode():
-    return jsonify({'mode': arm_mode})
-
-@app.route('/api/position', methods=['GET'])
-def get_position():
-    return jsonify({'success': True, 'position': current_position})
-
+#Pooling
 @app.route('/api/boxes', methods=['GET'])
 def get_boxes():
+    global detected_boxes
     return jsonify({'success': True, 'boxes': detected_boxes})
 
 @app.route('/api/image', methods=['GET'])
-def get_image():
-    if latest_image:
-        return jsonify({'success': True, 'image': latest_image})
+def get_latest_image():
+    global latest_img
+    if latest_img:
+        return jsonify({'success': True, 'image': latest_img})
     return jsonify({'success': False, 'image': None})
 
+
+@app.route('/api/send_position', methods=['POST'])
+def set_world_position():
+    global current_gripper_position_in_world, current_gripper_position_in_arm, world_angles
+    
+    try:
+        data = request.json
+        coords = data.get('coordinates')
+        is_in_world_frame = data.get('isWorldFrame')
+        move_to_position(coords, is_in_world_frame)
+        other_frame_coords = current_gripper_position_in_arm if is_in_world_frame else current_gripper_position_in_world
+        servo_angles = [int(x) for x in world_to_servo_angles(world_angles)]
+        return jsonify({'success': True, 'otherFrameCoords': other_frame_coords.tolist(), 'angles': servo_angles})
+    except Exception as e:
+        print(str(e))
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/grab_box', methods=['POST'])
+def grab_box():
+    try:
+        data = request.json
+        box_id = data.get('box_id')
+        box = next((box for box in detected_boxes if box.id==box_id), None)
+        move_to_position(box.grab_point)
+        print(f"Grabbing box {box_id}")
+        
+        return jsonify({'success': True, 'message': f'Grabbing box {box_id}'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+
+@app.route('/api/status', methods=['GET'])
+def status():
+    global ser, current_port
+    
+    connected = ser is not None and ser.is_open
+    return jsonify({
+        'connected': connected,
+        'port': current_port if connected else None
+    })
+    
 @app.route('/api/connect', methods=['POST'])
 def connect():
-    global ser, current_port, arm_mode
+    global ser, current_port, current_gripper_position_in_arm
     
     try:
         data = request.json
@@ -148,34 +256,24 @@ def connect():
         if ser and ser.is_open:
             ser.close()
         
-        # Open connection with robust settings
-        ser = serial.Serial(
-            port=port, 
-            baudrate=baudrate, 
-            timeout=0.1,
-            write_timeout=0.1,
-            inter_byte_timeout=0.01
-        )
+        ser = serial.Serial(port, baudrate, timeout=1)
         current_port = port
+        time.sleep(2)
         
-        # Flush buffers to clear any noise
-        ser.reset_input_buffer()
-        ser.reset_output_buffer()
+        # ser.reset_input_buffer()
+        # ser.reset_output_buffer()
         
         time.sleep(2)
         
         ser.write(b"activate\n")
         
-        # Switch to serial mode
-        arm_mode = "serial"
-        
-        return jsonify({'success': True, 'message': f'Connected to {port}'})
+        return jsonify({'success': True, 'message': f'Connected to {port}', 'armPosition': current_gripper_position_in_arm.tolist()})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/disconnect', methods=['POST'])
 def disconnect():
-    global ser, current_port, arm_mode
+    global ser, current_port
     
     try:
         if ser and ser.is_open:
@@ -188,7 +286,7 @@ def disconnect():
 
 @app.route('/api/servo', methods=['POST'])
 def control_servo():
-    global ser
+    global ser, world_angles, current_gripper_position_in_arm, current_gripper_position_in_world
     
     try:
         if not ser or not ser.is_open:
@@ -202,182 +300,62 @@ def control_servo():
         command = f"S{servo_id}:{angle:03d}\n"
         ser.write(command.encode())
         
-        return jsonify({'success': True, 'message': f'Servo {servo_id} set to {angle}°'})
+        if(servo_id < 5):
+            servo_angles_pattern = np.zeros(5)
+            servo_angles_pattern[servo_id] = angle
+            angle_name, new_world_angle = servo_to_world_angle(servo_angles_pattern, servo_id)
+            world_angles[angle_name] = new_world_angle
+        
+            current_gripper_position_in_arm, _ = get_gripper_coords_and_cam_rotation_from_arm(world_angles)
+            print("Pos: ",current_gripper_position_in_arm)
+            if(translation is not None):
+                current_gripper_position_in_world = transform_arm_to_world_coords(current_gripper_position_in_arm, system_angle, translation)
+        
+        return jsonify({'success': True, 'worldCoords': current_gripper_position_in_world.tolist(),
+                        'armCoords': current_gripper_position_in_arm.tolist()})
     except Exception as e:
+        print(str(e))
         return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/world_position', methods=['POST'])
-def set_world_position():
-    global current_gripper_position_in_world
-    
-    try:
-        data = request.json
-        x = data.get('x')
-        y = data.get('y')
-        z = data.get('z')
-        
-        # TODO: Implement inverse kinematics and send to arm
-        # For now, just update the position
-        current_gripper_position_in_world = [x,y,z]
-        
-        angles = get_move_angles()
-        
-        if ser and ser.is_open:
-            # TODO: Send serial command to arm
-            command = f"P:{x},{y},{z}\n"
-            ser.write(command.encode())
-        
-        return jsonify({'success': True, 'message': f'Position set to ({x}, {y}, {z})'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/grab_box', methods=['POST'])
-def grab_box():
-    try:
-        data = request.json
-        box_id = data.get('box_id')
-        
-        # TODO: Implement grab logic
-        # This would involve:
-        # 1. Get box position from detected_boxes
-        # 2. Calculate path to box
-        # 3. Send commands to arm
-        
-        print(f"Grabbing box {box_id}")
-        
-        return jsonify({'success': True, 'message': f'Grabbing box {box_id}'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/status', methods=['GET'])
-def status():
-    global ser, current_port
-    
-    connected = ser is not None and ser.is_open
-    return jsonify({
-        'connected': connected,
-        'port': current_port if connected else None
-    })
 
 @app.route('/api/serial_read', methods=['GET'])
 def serial_read():
-    global ser, current_position, detected_boxes, latest_image
+    global ser
     
     try:
         if not ser or not ser.is_open:
             return jsonify({'success': False, 'error': 'Not connected'})
         
         lines = []
-        try:
-            # Flush input buffer first to clear any corrupted data
-            ser.reset_input_buffer()
-            
-            # Wait a bit for new data
-            time.sleep(0.05)
-            
-            # Read all available bytes
-            if ser.in_waiting > 0:
-                raw_data = ser.read(ser.in_waiting)
-                # Decode and split by newlines
-                text = raw_data.decode('utf-8', errors='ignore')
-                lines = [line.strip() for line in text.split('\n') if line.strip()]
-                
-                # Process special messages
-                for line in lines:
-                    print(line)
-                    
-                    # TODO: Parse position updates from arm
-                    # Example: "POS:10.5,20.3,15.7"
-                    if line.startswith("POS:"):
-                        try:
-                            coords = line[4:].split(',')
-                            current_position = {
-                                "x": float(coords[0]),
-                                "y": float(coords[1]),
-                                "z": float(coords[2])
-                            }
-                        except:
-                            pass
-                    
-                    # TODO: Parse box detections
-                    # Example: "BOX:id,x,y,z,width,height,depth"
-                    if line.startswith("BOX:"):
-                        try:
-                            parts = line[4:].split(',')
-                            box = {
-                                "id": parts[0],
-                                "x": float(parts[1]),
-                                "y": float(parts[2]),
-                                "z": float(parts[3]),
-                                "width": float(parts[4]),
-                                "height": float(parts[5]),
-                                "depth": float(parts[6])
-                            }
-                            # Check if box already exists, update or add
-                            existing = next((b for b in detected_boxes if b['id'] == box['id']), None)
-                            if existing:
-                                detected_boxes[detected_boxes.index(existing)] = box
-                            else:
-                                detected_boxes.append(box)
-                        except:
-                            pass
-                    
-                    # TODO: Parse image data
-                    # This is a placeholder - implement based on your actual protocol
-                    if line.startswith("IMG:"):
-                        try:
-                            # Example: base64 encoded image
-                            img_data = line[4:]
-                            latest_image = img_data
-                        except:
-                            pass
-                        
-        except Exception as e:
-            # Character-by-character fallback
+        lines = []
+        while ser.in_waiting > 0:
             try:
-                chars = []
-                start_time = time.time()
-                while time.time() - start_time < 0.1:
-                    if ser.in_waiting > 0:
-                        char = ser.read(1).decode('utf-8', errors='ignore')
-                        if char == '\n':
-                            line = ''.join(chars).strip()
-                            if line:
-                                lines.append(line)
-                                print(line)
-                            chars = []
-                        else:
-                            chars.append(char)
-                    else:
-                        time.sleep(0.01)
+                line = ser.readline().decode('utf-8').strip()
+                if line:
+                    lines.append(line)
             except:
                 pass
+                        
+        # # except Exception as e:
+        # #     try:
+        #         chars = []
+        #         start_time = time.time()
+        #         while time.time() - start_time < 0.1:
+        #             if ser.in_waiting > 0:
+        #                 char = ser.read(1).decode('utf-8', errors='ignore')
+        #                 if char == '\n':
+        #                     line = ''.join(chars).strip()
+        #                     if line:
+        #                         lines.append(line)
+        #                         print(line)
+        #                     chars = []
+        #                 else:
+        #                     chars.append(char)
+        #             else:
+        #                 time.sleep(0.01)
+        # #     except:
+        # #         pass
         
         return jsonify({'success': True, 'data': lines})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-# HTTP endpoint for arm to send data when in HTTP mode
-@app.route('/api/arm_update', methods=['POST'])
-def arm_update():
-    global current_position, detected_boxes, latest_image
-    
-    try:
-        data = request.json
-        
-        # Update position if provided
-        if 'position' in data:
-            current_position = data['position']
-        
-        # Update detected boxes if provided
-        if 'boxes' in data:
-            detected_boxes = data['boxes']
-        
-        # Update image if provided
-        if 'image' in data:
-            latest_image = data['image']
-        
-        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

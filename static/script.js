@@ -3,7 +3,15 @@ let serialPollInterval = null;
 let selectedBoxId = null;
 let worldCoordDebounce = null;
 let armCoordDebounce = null;
-let worldPositionEnabled = false;
+let elementsEnabled = false;
+let isWaitingPhoto = false;
+
+function convertCoordsMetric(coords, from_server){
+    if (from_server) {
+        return coords.map(x=>Math.round(x*1000))
+    }
+    return coords.map(x=>x/1000)
+}
 
 function addSerialLine(text) {
     const output = document.getElementById('serialOutput');
@@ -20,33 +28,14 @@ function clearSerialOutput() {
     output.innerHTML = '<div class="serial-line"><span class="serial-timestamp">[System]</span><span>Serial monitor cleared</span></div>';
 }
 
-function updateModeIndicator(mode) {
-    const indicator = document.getElementById('modeIndicator');
-    currentMode = mode;
-    if (mode === 'http') {
-        indicator.textContent = 'HTTP MODE';
-        indicator.className = 'mode-indicator mode-http';
-    } else {
-        indicator.textContent = 'SERIAL MODE';
-        indicator.className = 'mode-indicator mode-serial';
-    }
+function enableElements() {
+    elementsEnabled = true;
+    document.getElementById('armPositionSection').classList.remove('disabled');
+    document.getElementById('servoGrid').classList.remove('disabled');
 }
 
-function enableWorldPosition() {
-    worldPositionEnabled = true;
+function enableWorldPosition(){
     document.getElementById('worldPositionSection').classList.remove('disabled');
-}
-
-function updateArmPosition(position) {
-    document.getElementById('armPosX').textContent = position.x.toFixed(1);
-    document.getElementById('armPosY').textContent = position.y.toFixed(1);
-    document.getElementById('armPosZ').textContent = position.z.toFixed(1);
-}
-
-function updateWorldPosition(position) {
-    document.getElementById('worldPosX').textContent = position.x.toFixed(1);
-    document.getElementById('worldPosY').textContent = position.y.toFixed(1);
-    document.getElementById('worldPosZ').textContent = position.z.toFixed(1);
 }
 
 function updateImage(imageData) {
@@ -103,63 +92,74 @@ function grabBox(boxId) {
 }
 
 function updateArmCoord(axis, value) {
-    document.getElementById(`armTarget${axis.toUpperCase()}`).textContent = value + ' mm';
+    document.getElementById(`armPos${axis.toUpperCase()}`).textContent = value;
     
-    // Debounce for HTTP mode
-    if (currentMode === 'http') {
-        clearTimeout(armCoordDebounce);
-        armCoordDebounce = setTimeout(() => {
-            sendArmPosition();
-        }, 2000);
-    } else {
+    clearTimeout(armCoordDebounce);
+    armCoordDebounce = setTimeout(() => {
         sendArmPosition();
-    }
+    }, 1000);
 }
 
 function updateWorldCoord(axis, value) {
-    document.getElementById(`worldTarget${axis.toUpperCase()}`).textContent = value + ' mm';
+    document.getElementById(`worldPos${axis.toUpperCase()}`).textContent = value;
     
-    if (currentMode === 'http') {
-        clearTimeout(worldCoordDebounce);
-        worldCoordDebounce = setTimeout(() => {
-            sendWorldPosition();
-        }, 2000);
-    } else {
+    clearTimeout(worldCoordDebounce);
+    worldCoordDebounce = setTimeout(() => {
         sendWorldPosition();
+    }, 1000);
+}
+
+function setPosition(coords, is_world_frame){
+    coords = convertCoordsMetric(coords, true);
+    const axisOrder = ['X', 'Y', 'Z'];
+    const frame = is_world_frame ? 'world' : 'arm';
+    for (let i = 0; i < 3; i++) {
+        document.getElementById(`${frame}Pos${axisOrder[i]}`).textContent = coords[i];
+        document.getElementById(`${frame}PosValue${axisOrder[i]}`).value = coords[i];
     }
 }
 
-function sendArmPosition() {
-    const x = parseInt(document.getElementById('armTargetX').textContent);
-    const y = parseInt(document.getElementById('armTargetY').textContent);
-    const z = parseInt(document.getElementById('armTargetZ').textContent);
 
-    fetch('/api/world_position', {
+function sendArmPosition() {
+    const x = parseInt(document.getElementById('armPosX').textContent);
+    const y = parseInt(document.getElementById('armPosY').textContent);
+    const z = parseInt(document.getElementById('armPosZ').textContent);
+
+    const coords = convertCoordsMetric([x,y,z], false);
+
+    fetch('/api/send_position', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({x, y, z, frame: 'arm'})
+        body: JSON.stringify({coordinates: coords, isWorldFrame: false})
     })
     .then(res => res.json())
     .then(data => {
         if (data.success) {
+            console.log(data.otherFrameCoords)
+            console.log(data.angles)
+            setPosition(data.otherFrameCoords, true)
+            setServoAngles(data.angles)
             addSerialLine(`Arm position set: (${x}, ${y}, ${z})`);
         }
     });
 }
 
 function sendWorldPosition() {
-    const x = parseInt(document.getElementById('worldTargetX').textContent);
-    const y = parseInt(document.getElementById('worldTargetY').textContent);
-    const z = parseInt(document.getElementById('worldTargetZ').textContent);
+    const x = parseInt(document.getElementById('worldPosX').textContent);
+    const y = parseInt(document.getElementById('worldPosY').textContent);
+    const z = parseInt(document.getElementById('worldPosZ').textContent);
 
-    fetch('/api/world_position', {
+    const coords = convertCoordsMetric([x,y,z], false);
+
+    fetch('/api/send_position', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({x, y, z, frame: 'world'})
+        body: JSON.stringify({coordinates: coords, isWorldFrame: true})
     })
     .then(res => res.json())
     .then(data => {
         if (data.success) {
+            setPosition(data.otherFrameCoords, false)
             addSerialLine(`World position set: (${x}, ${y}, ${z})`);
         }
     });
@@ -176,36 +176,26 @@ function pollSerialData() {
 }
 
 function pollArmData() {
-    fetch('/api/position')
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
-                updateArmPosition(data.position);
-            }
-        });
+    if (isWaitingPhoto) {
+        fetch('/api/boxes')
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    isWaitingPhoto = false;
+                    window.lastBoxes = data.boxes;
+                    updateBoxesList(data.boxes);
+                }
+            });
 
-    fetch('/api/boxes')
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
-                window.lastBoxes = data.boxes;
-                updateBoxesList(data.boxes);
-            }
-        });
-
-    fetch('/api/image')
-        .then(res => res.json())
-        .then(data => {
-            if (data.success && data.image) {
-                updateImage(data.image);
-            }
-        });
-
-    fetch('/api/mode')
-        .then(res => res.json())
-        .then(data => {
-            updateModeIndicator(data.mode);
-        });
+        fetch('/api/image')
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.image) {
+                    isWaitingPhoto = false;
+                    updateImage(data.image);
+                }
+            });
+    }
 }
 
 function startSerialPolling() {
@@ -244,8 +234,17 @@ function updateStatus() {
                 status.textContent = 'Disconnected';
                 status.className = 'status disconnected';
             }
-            updateModeIndicator(data.mode);
         });
+}
+
+function setServoAngles(angles){
+    for (let i = 0; i < angles.length; i++) {
+        const valueSlider = document.getElementById(`servoId${i}`);
+        if(valueSlider){
+            valueSlider.value = angles[i];
+            document.getElementById(`value${i}`).textContent = angles[i];
+        }
+    }
 }
 
 function loadServos() {
@@ -275,7 +274,7 @@ function createServoCards() {
                 <span class="servo-value" id="value${servo.id}">${servo.initial_angle}°</span>
             </div>
             <div class="slider-container">
-                <input type="range" min="${min}" max="${max}" value="${servo.initial_angle}" 
+                <input id="servoId${servo.id}" type="range" min="${min}" max="${max}" value="${servo.initial_angle}" 
                         oninput="updateServo(${servo.id}, this.value)">
                 <div class="angle-labels">
                     <span>${min}°</span>
@@ -309,6 +308,11 @@ function refreshPorts() {
         });
 }
 
+function takePhoto(){
+    isWaitingPhoto = true;
+    fetch('/api/cam');
+}
+
 function connect() {
     const port = document.getElementById('portSelect').value;
 
@@ -331,6 +335,8 @@ function connect() {
             updateStatus();
             startSerialPolling();
             loadServos();
+            enableElements();
+            setPosition(data.armPosition, false);
         } else {
             showMessage('Error: ' + data.error, 'error');
             addSerialLine('Connection failed: ' + data.error);
@@ -356,14 +362,13 @@ function disconnect() {
 function updateServo(id, angle) {
     document.getElementById(`value${id}`).textContent = `${angle}°`;
     
-    if (currentMode === 'serial') {
-        sendServoCommand(id, angle);
-    } else {
-        clearTimeout(window[`servoDebounce${id}`]);
-        window[`servoDebounce${id}`] = setTimeout(() => {
-            sendServoCommand(id, angle);
-        }, 2000);
-    }
+    sendServoCommand(id, angle);
+    //  else {
+    //     clearTimeout(window[`servoDebounce${id}`]);
+    //     window[`servoDebounce${id}`] = setTimeout(() => {
+    //         sendServoCommand(id, angle);
+    //     }, 2000);
+    // }
 }
 
 function sendServoCommand(id, angle) {
@@ -374,7 +379,10 @@ function sendServoCommand(id, angle) {
     })
     .then(res => res.json())
     .then(data => {
-        if (!data.success) {
+        if (data.success) {
+            setPosition(data.worldCoords, true);
+            setPosition(data.armCoords, false);
+        } else {
             showMessage('Error: ' + data.error, 'error');
         }
     });
@@ -388,4 +396,6 @@ window.onload = function() {
     
     // Disable world position initially
     document.getElementById('worldPositionSection').classList.add('disabled');
+    document.getElementById('armPositionSection').classList.add('disabled');
+    document.getElementById('servoGrid').classList.add('disabled');
 };

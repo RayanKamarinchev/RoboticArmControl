@@ -2,6 +2,71 @@ import math
 import os
 import numpy as np
 from scipy.optimize import minimize
+from dataclasses import dataclass
+
+class Angle:
+    def __init__(self, *, rad=None, deg=None):
+        if rad is not None:
+            self._rad = float(rad)
+        elif deg is not None:
+            self._rad = np.radians(deg)
+        else:
+            raise ValueError("Provide radians or degrees")
+
+    def __float__(self):
+        return self._rad
+    
+    def __array__(self, dtype=None):
+        return np.array(self._rad, dtype=dtype)
+
+    @property
+    def rad(self):
+        return self._rad
+
+    @property
+    def deg(self):
+        return np.degrees(self._rad)
+
+    def __add__(self, other):
+        return Angle(rad=self._rad + self._to_rad(other))
+
+    def __sub__(self, other):
+        return Angle(rad=self._rad - self._to_rad(other))
+
+    def __mul__(self, scalar):
+        return Angle(rad=self._rad * scalar)
+
+    def __truediv__(self, scalar):
+        return Angle(rad=self._rad / scalar)
+
+    def __eq__(self, other):
+        return np.isclose(self._rad, self._to_rad(other))
+
+    def __repr__(self):
+        return f"Angle({self.deg:.2f}°)"
+
+    def _to_rad(self, value):
+        if isinstance(value, Angle):
+            return value.rad
+        return float(value)
+    
+@dataclass
+class Angles:
+    alpha: Angle
+    beta: Angle
+    gamma: Angle
+    theta: Angle
+    psi: Angle
+    
+    def __getitem__(self, key):
+        if not hasattr(self, key):
+            raise KeyError(key)
+        return getattr(self, key)
+    
+    def __setitem__(self, key, value):
+        if not hasattr(self, key):
+            raise KeyError(key)
+        setattr(self, key, value)
 
 # Robot arm segment lengths in cm
 a = 0.12
@@ -12,16 +77,31 @@ camera_offset_len = 0.016
 baseElevation = 0.132 # 30-32
 # Initial joint angles in degrees
 delta = np.radians(75) #around 78
-offsets = [-3, 205, 69]
-
+offsets = [Angle(deg=-3), Angle(deg=205), Angle(deg=69), Angle(deg=155)]
 
 def get_initial_angles():
-    alpha = np.radians(100+offsets[0])
-    beta = np.radians(offsets[1]-100)
-    gamma = np.radians(6+offsets[2])
-    theta = np.radians(0)
-    psi = np.radians(0)
-    return [alpha, beta, gamma, theta, psi]
+    alpha = Angle(deg=100) + offsets[0]
+    beta = offsets[1] - Angle(deg=100)
+    gamma = Angle(deg=6) + offsets[2]
+    theta = Angle(deg=0)
+    psi = Angle(deg=0)
+    return Angles(alpha, beta, gamma, theta, psi)
+
+def world_to_servo_angles(angles: Angles):
+    #[theta, alpha, beta, psi, gamma]
+    servo_angles = [Angle(deg=30)-angles.theta, angles.alpha-offsets[0], offsets[1]-angles.beta, offsets[3]-angles.psi, angles.gamma-offsets[2]]
+    return [np.round(angle.deg).astype(int) for angle in servo_angles]
+
+def servo_to_world_angle(servo_angles: np.ndarray, idx):
+    index_to_name_map = ["theta", "alpha", "beta", "psi", "gamma"]
+    
+    world_angles = [Angle(deg=30)-Angle(deg=servo_angles[0]),
+                        Angle(deg=servo_angles[1])+offsets[0],
+                        offsets[1]-Angle(deg=servo_angles[2]),
+                        offsets[3]-Angle(deg=servo_angles[3]),
+                        Angle(deg=servo_angles[4])+offsets[2]]
+    return (index_to_name_map[idx], world_angles[idx])
+
 
 def get_arm_vectors(alpha, beta, gamma, psi): 
     l2_angle = alpha + beta - np.pi
@@ -36,7 +116,7 @@ def get_arm_vectors(alpha, beta, gamma, psi):
     #head arm angle relative to x
     angle_sum = alpha + beta + gamma
     #head elevation from base arm
-    epsilon = np.pi/2 + angle_sum - phi
+    epsilon = angle_sum + np.pi/2 - phi
     #head arm components
     lh_x = c * np.array([np.cos(angle_sum), 0, np.sin(angle_sum)])
     lh_y = c * np.array([np.sin(epsilon) * np.cos(phi), np.cos(epsilon), np.sin(epsilon) * np.sin(phi)])
@@ -45,7 +125,10 @@ def get_arm_vectors(alpha, beta, gamma, psi):
     return lb, lh
 
 def get_gripper_coords_and_cam_rotation_from_arm(angles):
-    alpha, beta, gamma, theta, psi = angles
+    if isinstance(angles, Angles):
+        alpha, beta, gamma, theta, psi = (angles.alpha, angles.beta, angles.gamma, angles.theta, angles.psi)
+    else:
+        alpha, beta, gamma, theta, psi = angles
     psi=0
     
     lb, lh = get_arm_vectors(alpha, beta, gamma, psi)
@@ -90,35 +173,27 @@ def get_translation(p1, p2, alpha):
     R = get_rotation_matrix(alpha)
     return p2 - R @ p1
 
-def transform_arm_to_space_coords(p1, alpha, t):
+def transform_arm_to_world_coords(p1, alpha, t):
     R = get_rotation_matrix(alpha)
     return R @ p1 + t
 
-def transform_space_to_arm_coords(p2, alpha, t):
+def transform_world_to_arm_coords(p2, alpha, t):
     R = get_rotation_matrix(alpha)
     return R.T @ (p2 - t)
 
-def move_to_position(initial_gripper_position_in_space, initial_angles, desired_coords, coordinate_systems_angle):
-    x, y, z = desired_coords
-    initial_gripper_position_from_arm, initial_cam_rotation = get_gripper_coords_and_cam_rotation_from_arm(initial_angles)
-    print(f"Moving to position x:{x} y:{y} z:{z}")
-    print("Angle: ", coordinate_systems_angle)
-    
-    arm_angle = np.arctan2(initial_gripper_position_from_arm[1], initial_gripper_position_from_arm[0])
-    print("Arm angle", np.degrees(arm_angle))
-    
-    coordinate_systems_angle -= arm_angle
-    print("Initial grip position from arm", initial_gripper_position_from_arm)
-    print("Initial grip position in space", initial_gripper_position_in_space)
-    print("arm vec in space", get_rotation_matrix(coordinate_systems_angle) @ initial_gripper_position_from_arm)
-    translation = get_translation(initial_gripper_position_from_arm, initial_gripper_position_in_space, coordinate_systems_angle)
-    print("Translation: ", translation)
+def get_move_angles(target_coords, translation, rotation_angle, starting_angles = get_initial_angles(), is_in_world_frame = True):
+    x, y, z = target_coords
+    starting_angles = [starting_angles.alpha.rad, starting_angles.beta.rad, starting_angles.gamma.rad, starting_angles.theta.rad, starting_angles.psi.rad]
+    print("Target: ", target_coords)
+    print("Starting angles: ", starting_angles)
+    print("Initial angles: ", get_initial_angles())
     def objective(vars):
-        position_from_arm, camera_angles = get_gripper_coords_and_cam_rotation_from_arm(vars)
+        position_pred, camera_angles = get_gripper_coords_and_cam_rotation_from_arm(vars)
         #convert from arm coordinate system to from board(in space) coordinate system
-        position_in_space = transform_arm_to_space_coords(position_from_arm, coordinate_systems_angle, translation)
+        if(is_in_world_frame):
+            position_pred = transform_arm_to_world_coords(position_pred, rotation_angle, translation)
         
-        position_diff = np.linalg.norm(position_in_space-np.array([x,y,z]))
+        position_diff = np.linalg.norm(position_pred-np.array([x,y,z]))
         # position_diff = np.linalg.norm(position_in_space-np.array([x,-y,z]))
         #TODO camera difference
         # penalty = np.linalg.norm(vars - initial_angles)
@@ -127,53 +202,35 @@ def move_to_position(initial_gripper_position_in_space, initial_angles, desired_
         return position_diff + 1e-4 * penalty
 
     bounds = [
-        (np.radians(-10), np.radians(-10+180)),       # alpha
-        (np.radians(34), np.radians(34+180)),       # beta
-        (np.radians(73), np.radians(73+180)),       # gamma
+        (offsets[0].rad, offsets[0].rad+np.pi/2),       # alpha
+        (offsets[1].rad-np.pi/2, offsets[1].rad),       # beta
+        (offsets[2].rad, offsets[2].rad+np.pi/2),       # gamma
         (np.radians(-150), np.radians(-150+180)),   # theta
         # (np.radians(-30), np.radians(-30+180))      # psi
-        (np.radians(0), np.radians(0))      # psi
+        (0, 0)      # psi
     ]
 
     result = minimize(
         objective,
-        initial_angles,
+        starting_angles,
         bounds=bounds,
     )
+    
+    alpha, beta, gamma, theta, psi  = result.x
+    angles_output = Angles(Angle(rad=alpha), Angle(rad=beta), Angle(rad=gamma), Angle(rad=theta), Angle(rad=psi))
+    print("Angles: ", angles_output)
+    # if result.success or result.fun < 1e-6:
+    #     alpha, beta, gamma, theta, psi  = result.x
+    # else:
+    #     print("Optimization failed:", result.message)
 
-    if result.success or result.fun < 1e-6:
-        print("angles:")
-        print(np.round(np.degrees(result.x),  decimals=1))
-        alpha, beta, gamma, theta, psi  = np.round(np.degrees(result.x))
-        
-        position_from_arm, camera_angles = get_gripper_coords_and_cam_rotation_from_arm(result.x)
-        print("x grip in space", np.sin(coordinate_systems_angle)*initial_gripper_position_in_space[0])
-        print("y grip in space", -np.cos(coordinate_systems_angle)*initial_gripper_position_in_space[1])
-        print("y grip in arm", - initial_gripper_position_from_arm[1])
-        print("pos", - position_from_arm[1])
-        
-        pos, cam_rotation = get_gripper_coords_and_cam_rotation_from_arm(result.x)
-        print(f"Initial gripper position from arm", initial_gripper_position_from_arm)
-        print(f"Initial gripper position in space", initial_gripper_position_in_space)
-        pos[0] = initial_gripper_position_from_arm[0] + initial_gripper_position_in_space[0] - pos[0]
-        pos[1] = initial_gripper_position_in_space[1] + pos[1]
-    else:
-        print("Optimization failed:", result.message)
-
-    return [theta, alpha, beta, psi, gamma]
-
-def get_move_angles(camera_coords, target_coords, current_angles, coordinate_systems_angle):
-    #TODO coordinate_systems_angle + arm_angle
-    gripper_coords_in_space = conv_camera_coords_to_gripper_coords(camera_coords, current_angles, coordinate_systems_angle)
-    print("Gripper coords in space", gripper_coords_in_space)
-    angles = move_to_position(gripper_coords_in_space, current_angles, target_coords, coordinate_systems_angle)
-    return angles
+    return angles_output
 
 def conv_camera_coords_to_gripper_coords(camera_coords, angles, coordinate_systems_angle):
-    gripper_angle = angles[0] + angles[1] + angles[2]
+    alpha, beta, gamma, theta, psi = (angles.alpha, angles.beta, angles.gamma, angles.theta, angles.psi)
     
-    _, arm_head = get_arm_vectors(angles[0], angles[1], angles[2], angles[4])
-    _, camera_vector_direction = get_arm_vectors(angles[0], angles[1], angles[2] + delta, angles[4])
+    _, arm_head = get_arm_vectors(alpha, beta, gamma, psi)
+    _, camera_vector_direction = get_arm_vectors(alpha, beta, gamma + delta, psi)
     camera_vector_normalized = camera_vector_direction * e / c
     camera_offset = np.cross(arm_head, camera_vector_normalized)
     # print(camera_vector_normalized, "cam vec")
