@@ -1,21 +1,27 @@
 import cv2
 import numpy as np
-from pyzbar.pyzbar import decode
 from ultralytics import YOLO
 import os
 import cv2.aruco as aruco
+from dataclasses import dataclass, asdict
 
 BOX_CODE_SIZE = 0.03
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, 'model/best.pt')
 
+@dataclass
 class Box:
-    def __init__(self, id, grab_point, width, length, height):
-        self.id = id
-        self.grab_point = grab_point
-        self.width = width
-        self.length = length
-        self.height = height
+    id: int
+    grab_point: list
+    width: float
+    length: float
+    height: float
+    
+    def to_dict(self):
+        d = asdict(self)
+        if isinstance(d["grab_point"], np.ndarray):
+            d["grab_point"] = d["grab_point"].tolist()
+        return d
 
 def rescale_masks(masks, img_shape):
     scale = img_shape[0] / masks.shape[1]

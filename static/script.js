@@ -7,10 +7,15 @@ let elementsEnabled = false;
 let isWaitingPhoto = false;
 
 function convertCoordsMetric(coords, from_server){
-    if (from_server) {
-        return coords.map(x=>Math.round(x*1000))
+    const convert = x => from_server
+        ? Math.round(x * 1000)
+        : x / 1000;
+
+    if (Array.isArray(coords)) {
+        return coords.map(convert);
     }
-    return coords.map(x=>x/1000)
+
+    return convert(coords);
 }
 
 function addSerialLine(text) {
@@ -55,18 +60,22 @@ function updateBoxesList(boxes) {
         return;
     }
 
-    list.innerHTML = boxes.map(box => `
-        <div class="box-item ${selectedBoxId === box.id ? 'selected' : ''}" onclick="selectBox('${box.id}')">
+    list.innerHTML = boxes.map(box => {
+        box.grab_point = convertCoordsMetric(box.grab_point, true);
+        box.width = convertCoordsMetric(box.width, true);
+        box.length = convertCoordsMetric(box.length, true);
+        box.height = convertCoordsMetric(box.height, true);
+        return `<div class="box-item ${selectedBoxId === box.id ? 'selected' : ''}" onclick="selectBox('${box.id}')">
             <div class="box-header">
                 <span class="box-id">Box ${box.id}</span>
                 <button class="btn-grab" onclick="grabBox('${box.id}'); event.stopPropagation();">Grab</button>
             </div>
             <div class="box-details">
-                <div>Position: (${box.x.toFixed(1)}, ${box.y.toFixed(1)}, ${box.z.toFixed(1)}) mm</div>
-                <div>Size: ${box.width.toFixed(1)} × ${box.height.toFixed(1)} × ${box.depth.toFixed(1)} mm</div>
+                <div>Position: (${box.grab_point[0].toFixed(1)}, ${box.grab_point[1].toFixed(1)}, ${box.grab_point[2].toFixed(1)}) mm</div>
+                <div>Size: ${box.width.toFixed(1)} × ${box.length.toFixed(1)} × ${box.height.toFixed(1)} mm</div>
             </div>
         </div>
-    `).join('');
+    `}).join('');
 }
 
 function selectBox(boxId) {
@@ -83,6 +92,9 @@ function grabBox(boxId) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
+            setPosition(data.worldFrameCoords, true);
+            setPosition(data.armFrameCoords, false);
+            setServoAngles(data.angles)
             showMessage(`Grabbing box ${boxId}...`, 'success');
             addSerialLine(`Command sent: Grab box ${boxId}`);
         } else {
@@ -135,8 +147,6 @@ function sendArmPosition() {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log(data.otherFrameCoords)
-            console.log(data.angles)
             setPosition(data.otherFrameCoords, true)
             setServoAngles(data.angles)
             addSerialLine(`Arm position set: (${x}, ${y}, ${z})`);
@@ -160,6 +170,7 @@ function sendWorldPosition() {
     .then(data => {
         if (data.success) {
             setPosition(data.otherFrameCoords, false)
+            setServoAngles(data.angles)
             addSerialLine(`World position set: (${x}, ${y}, ${z})`);
         }
     });
@@ -175,24 +186,19 @@ function pollSerialData() {
         });
 }
 
-function pollArmData() {
+function pollCamData() {
     if (isWaitingPhoto) {
-        fetch('/api/boxes')
+        fetch('/api/cam_data')
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
+                    console.log(data.worldCoords);
                     isWaitingPhoto = false;
+
+                    updateImage(data.image);
+                    setPosition(data.worldCoords, true);
                     window.lastBoxes = data.boxes;
                     updateBoxesList(data.boxes);
-                }
-            });
-
-        fetch('/api/image')
-            .then(res => res.json())
-            .then(data => {
-                if (data.success && data.image) {
-                    isWaitingPhoto = false;
-                    updateImage(data.image);
                 }
             });
     }
@@ -204,7 +210,7 @@ function startSerialPolling() {
     }
     serialPollInterval = setInterval(() => {
         pollSerialData();
-        pollArmData();
+        pollCamData();
     }, 100);
 }
 
@@ -380,8 +386,8 @@ function sendServoCommand(id, angle) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            setPosition(data.worldCoords, true);
-            setPosition(data.armCoords, false);
+            setPosition(data.worldFrameCoords, true);
+            setPosition(data.armFrameCoords, false);
         } else {
             showMessage('Error: ' + data.error, 'error');
         }

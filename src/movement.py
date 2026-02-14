@@ -169,9 +169,9 @@ def get_rotation_matrix(alpha):
         [0, 0, 1]
     ])
     
-def get_translation(p1, p2, alpha):
+def get_translation(world_pos, arm_pos, alpha):
     R = get_rotation_matrix(alpha)
-    return p2 - R @ p1
+    return world_pos - R @ arm_pos
 
 def transform_arm_to_world_coords(p1, alpha, t):
     R = get_rotation_matrix(alpha)

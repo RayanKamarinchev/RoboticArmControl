@@ -111,6 +111,14 @@ button {
     background: #368799;
 }
 
+.btn-photo {
+    background: #ffc107;
+}
+
+.btn-photo:hover {
+    background: #e0a800;
+}
+
 .btn-grab {
     background: #41a5b9;
     color: white;

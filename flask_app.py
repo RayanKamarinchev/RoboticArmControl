@@ -7,6 +7,8 @@ import os
 import numpy as np
 import socket
 import logging
+import base64
+from flask.json.provider import DefaultJSONProvider
 
 from src.box_detection import get_box_coordinates, Box
 from src.camera_utils import decode_image, get_camera_position, get_marker_positions, get_camera_matrix_and_dist_coeffs
@@ -15,6 +17,15 @@ from src.movement import (get_move_angles, get_initial_angles,
                           transform_arm_to_world_coords, transform_world_to_arm_coords,
                           get_translation, world_to_servo_angles, servo_to_world_angle)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE" #TODO
+class NumpyJSONProvider(DefaultJSONProvider):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        return super().default(obj)
 
 class IgnoreEndpointsFilter(logging.Filter):
     def __init__(self, ignored_paths):
@@ -51,7 +62,6 @@ IMAGE_2_PATH = os.path.join(UPLOAD_FOLDER, "image2.jpg")
 IMAGE_PATHS = [IMAGE_1_PATH, IMAGE_2_PATH]
 DEBUG_DATA_PATH = "src/data.csv"
 instructions = []
-flag = False
 counter = 0
 ser = None
 current_port = None
@@ -61,7 +71,7 @@ system_angle = None
 world_angles = get_initial_angles()
 current_gripper_position_in_world = np.zeros(3)
 current_gripper_position_in_arm, _ = get_gripper_coords_and_cam_rotation_from_arm(world_angles)
-detected_boxes = []
+detected_boxes = None
 latest_img = None
 server_ip = None
 
@@ -91,18 +101,20 @@ servos = [Servo(0, "Servo Base", 0, 180, 30),
 
 def move_to_position(target_coords, is_in_world_frame = True):
     global current_gripper_position_in_world, current_gripper_position_in_arm, translation, system_angle, world_angles
-    
+    target_coords = np.array(target_coords)
     if(is_in_world_frame):
-        current_gripper_position_in_world = np.array(target_coords)
+        current_gripper_position_in_world = target_coords
         if(translation is not None):
+            print("prev arm: ", current_gripper_position_in_arm)
             current_gripper_position_in_arm = transform_world_to_arm_coords(current_gripper_position_in_world, system_angle, translation)
+            print("later arm: ", current_gripper_position_in_arm)
     else:
-        current_gripper_position_in_arm = np.array(target_coords)
+        current_gripper_position_in_arm = target_coords
         if(translation is not None):
             current_gripper_position_in_world = transform_arm_to_world_coords(current_gripper_position_in_arm, system_angle, translation)
     
     print("World angles before: ", world_angles)
-    world_angles = get_move_angles(np.array(target_coords), translation, system_angle, world_angles, is_in_world_frame)
+    world_angles = get_move_angles(target_coords, translation, system_angle, world_angles, is_in_world_frame)
     print("World angles after: ", world_angles)
     servo_angles = world_to_servo_angles(world_angles)
     if ser and ser.is_open:
@@ -125,7 +137,7 @@ def get_local_ip():
 
 @app.route('/get_position', methods=['POST'])
 def receive_image():
-    global flag, current_gripper_position_in_world, current_gripper_position_in_arm, detected_boxes, translation, system_angle, latest_img
+    global current_gripper_position_in_world, current_gripper_position_in_arm, detected_boxes, translation, system_angle, latest_img
     
     if 'imageFile' not in request.files:
         print("FILES:", request.files)
@@ -139,6 +151,8 @@ def receive_image():
     cv2.imwrite(LATEST_IMAGE_PATH, img)
     
     _, camera_position, coordinate_systems_angle, R, rvec, tvec = get_camera_position(img, get_marker_positions(MARKER_SIZE, MARKER_SPACING), MARKER_SIZE)
+    if(camera_position is None):
+        return jsonify({"error": "No aruco board"}), 400
 
     print("Coordinate systems angle: ", np.degrees(coordinate_systems_angle))
     current_gripper_position_in_world = conv_camera_coords_to_gripper_coords(camera_position, world_angles, coordinate_systems_angle)
@@ -152,8 +166,7 @@ def receive_image():
     
     detected_boxes = get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rvec, tvec)
     print(detected_boxes)
-    latest_img = img
-    flag = True
+    latest_img = base64.b64encode(file_bytes).decode('utf-8')
     
     return jsonify({"message": "OK"}), 200
 
@@ -168,12 +181,38 @@ def index():
 
 @app.route('/api/cam', methods=['GET'])
 def get_image():
-    print("here")
-    print(get_local_ip())
-    if ser and ser.is_open:
-        command = f"take_photo:{get_local_ip()}\n"
-        print(command)
-        ser.write(command.encode())
+    global current_gripper_position_in_world, current_gripper_position_in_arm, detected_boxes, translation, system_angle, latest_img
+    # global latest_img, detected_boxes
+    current_gripper_position_in_world = np.zeros(3)
+    latest_img = None
+    detected_boxes = None
+    
+    # if ser and ser.is_open:
+    #     command = f"take_photo:{get_local_ip()}\n"
+    #     ser.write(command.encode())
+    
+    img = cv2.imread(LATEST_IMAGE_PATH)
+    
+    _, camera_position, coordinate_systems_angle, R, rvec, tvec = get_camera_position(img, get_marker_positions(MARKER_SIZE, MARKER_SPACING), MARKER_SIZE)
+    if(camera_position is None):
+        return jsonify({"error": "No aruco board"}), 400
+
+    print("Coordinate systems angle: ", np.degrees(coordinate_systems_angle))
+    current_gripper_position_in_world = conv_camera_coords_to_gripper_coords(camera_position, world_angles, coordinate_systems_angle)
+    arm_angle = np.arctan2(current_gripper_position_in_arm[1], current_gripper_position_in_arm[0])
+    print("Arm angle: ", np.degrees(arm_angle))
+    system_angle = coordinate_systems_angle-arm_angle
+    
+    translation = get_translation(current_gripper_position_in_world, current_gripper_position_in_arm, system_angle)
+    
+    camera_matrix, dist_coeffs = get_camera_matrix_and_dist_coeffs()
+    
+    detected_boxes = get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rvec, tvec)
+    print(detected_boxes)
+    success, file_bytes = cv2.imencode(".jpg", img)
+    latest_img = base64.b64encode(file_bytes).decode('utf-8')
+    print(type(latest_img))
+    
     return jsonify({'success': True})
 
 
@@ -189,18 +228,19 @@ def get_ports():
 def get_servos():
     return jsonify({'success': True, 'servos': [s.to_dict() for s in servos]})
 
-#Pooling
-@app.route('/api/boxes', methods=['GET'])
+#Polling
+@app.route('/api/cam_data', methods=['GET'])
 def get_boxes():
-    global detected_boxes
-    return jsonify({'success': True, 'boxes': detected_boxes})
-
-@app.route('/api/image', methods=['GET'])
-def get_latest_image():
-    global latest_img
-    if latest_img:
-        return jsonify({'success': True, 'image': latest_img})
-    return jsonify({'success': False, 'image': None})
+    global current_gripper_position_in_world, detected_boxes, latest_img
+    if latest_img is not None:
+        #TODO maybe handle empty boxes and no pos?
+        print("Grip is world: ", current_gripper_position_in_world)
+        print("Detected boxes: ", detected_boxes)
+        return jsonify({'success': True, 
+                        'image': latest_img,
+                        'worldCoords': current_gripper_position_in_world.tolist(),
+                        'boxes': [box.to_dict() for box in detected_boxes]})
+    return jsonify({'success': False, 'image': None, 'worldCoords': None, 'boxes': None})
 
 
 @app.route('/api/send_position', methods=['POST'])
@@ -211,6 +251,7 @@ def set_world_position():
         data = request.json
         coords = data.get('coordinates')
         is_in_world_frame = data.get('isWorldFrame')
+        
         move_to_position(coords, is_in_world_frame)
         other_frame_coords = current_gripper_position_in_arm if is_in_world_frame else current_gripper_position_in_world
         servo_angles = [int(x) for x in world_to_servo_angles(world_angles)]
@@ -221,15 +262,21 @@ def set_world_position():
 
 @app.route('/api/grab_box', methods=['POST'])
 def grab_box():
+    global detected_boxes, world_angles
     try:
         data = request.json
         box_id = data.get('box_id')
-        box = next((box for box in detected_boxes if box.id==box_id), None)
+        box = next(box for box in detected_boxes if box.id==int(box_id))
         move_to_position(box.grab_point)
         print(f"Grabbing box {box_id}")
+        servo_angles = [int(x) for x in world_to_servo_angles(world_angles)]
         
-        return jsonify({'success': True, 'message': f'Grabbing box {box_id}'})
+        return jsonify({'success': True, 
+                        'armFrameCoords': current_gripper_position_in_arm,
+                        'worldFrameCoords': current_gripper_position_in_world,
+                        'angles': servo_angles})
     except Exception as e:
+        print(str(e))
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -311,8 +358,9 @@ def control_servo():
             if(translation is not None):
                 current_gripper_position_in_world = transform_arm_to_world_coords(current_gripper_position_in_arm, system_angle, translation)
         
-        return jsonify({'success': True, 'worldCoords': current_gripper_position_in_world.tolist(),
-                        'armCoords': current_gripper_position_in_arm.tolist()})
+        return jsonify({'success': True, 
+                        'worldFrameCoords': current_gripper_position_in_world.tolist(),
+                        'armFrameCoords': current_gripper_position_in_arm.tolist()})
     except Exception as e:
         print(str(e))
         return jsonify({'success': False, 'error': str(e)})
@@ -360,4 +408,5 @@ def serial_read():
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.json = NumpyJSONProvider(app)
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
