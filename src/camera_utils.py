@@ -5,8 +5,9 @@ import io
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CAMERA_MATRIX_DIR = os.path.join(BASE_DIR, "camera_matrix.npy")
-DIST_COEFFS_DIR = os.path.join(BASE_DIR, "dist_coeffs.npy")
+CAM_PARAMETERS_DIR = os.path.join(BASE_DIR, "cam_parameters")
+CAMERA_MATRIX_DIR = os.path.join(CAM_PARAMETERS_DIR, "camera_matrix.npy")
+DIST_COEFFS_DIR = os.path.join(CAM_PARAMETERS_DIR, "dist_coeffs.npy")
 
 def angle_between(v1, v2):
     v1 = v1 / np.linalg.norm(v1)
