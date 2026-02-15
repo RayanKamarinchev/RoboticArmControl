@@ -77,7 +77,7 @@ camera_offset_len = 0.016
 baseElevation = 0.132 # 30-32
 # Initial joint angles in degrees
 delta = np.radians(75) #around 78
-offsets = [Angle(deg=-3), Angle(deg=205), Angle(deg=69), Angle(deg=155)]
+offsets = [Angle(deg=-3), Angle(deg=205), Angle(deg=65), Angle(deg=155)]
 
 def get_initial_angles():
     alpha = Angle(deg=100) + offsets[0]
@@ -197,14 +197,14 @@ def get_move_angles(target_coords, translation, rotation_angle, starting_angles 
         # position_diff = np.linalg.norm(position_in_space-np.array([x,-y,z]))
         #TODO camera difference
         # penalty = np.linalg.norm(vars - initial_angles)
-        penalty = np.abs(vars[3]) + np.abs(vars[4])*3
+        penalty = np.abs(vars[2]-np.pi/2)*3 + np.abs(vars[3]) + np.abs(vars[4])*3
         # penalty = 5*vars[0]-np.round(vars[0])
         return position_diff + 1e-4 * penalty
 
     bounds = [
-        (offsets[0].rad, offsets[0].rad+np.pi/2),       # alpha
-        (offsets[1].rad-np.pi/2, offsets[1].rad),       # beta
-        (offsets[2].rad, offsets[2].rad+np.pi/2),       # gamma
+        (offsets[0].rad, offsets[0].rad+np.pi),       # alpha
+        (offsets[1].rad-np.pi, offsets[1].rad),       # beta
+        (offsets[2].rad, offsets[2].rad+np.pi),       # gamma
         (np.radians(-150), np.radians(-150+180)),   # theta
         # (np.radians(-30), np.radians(-30+180))      # psi
         (0, 0)      # psi

@@ -55,19 +55,14 @@ BASELINE=0.02
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-INSTRUCTIONS_DIR = os.path.join(UPLOAD_FOLDER, "instructions.json")
 LATEST_IMAGE_PATH = os.path.join(UPLOAD_FOLDER, "latest.jpg")
-IMAGE_1_PATH = os.path.join(UPLOAD_FOLDER, "image1.jpg")
-IMAGE_2_PATH = os.path.join(UPLOAD_FOLDER, "image2.jpg")
-IMAGE_PATHS = [IMAGE_1_PATH, IMAGE_2_PATH]
-DEBUG_DATA_PATH = "src/data.csv"
 instructions = []
 counter = 0
 ser = None
 current_port = None
+
 translation = None
 system_angle = None
-
 world_angles = get_initial_angles()
 current_gripper_position_in_world = np.zeros(3)
 current_gripper_position_in_arm, _ = get_gripper_coords_and_cam_rotation_from_arm(world_angles)
@@ -97,7 +92,7 @@ servos = [Servo(0, "Servo Base", 0, 180, 30),
           Servo(1, "Servo Joint 1", 0, 180, 100),
           Servo(2, "Servo Joint 2", 0, 180, 100),
           Servo(4, "Servo Head Joint", 0, 180, 6), 
-          Servo(5, "Servo Gripper", 90, 180, 160)]
+          Servo(5, "Servo Gripper", 70, 160, 160)]
 
 def move_to_position(target_coords, is_in_world_frame = True):
     global current_gripper_position_in_world, current_gripper_position_in_arm, translation, system_angle, world_angles
@@ -164,9 +159,14 @@ def receive_image():
     
     camera_matrix, dist_coeffs = get_camera_matrix_and_dist_coeffs()
     
-    detected_boxes = get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rvec, tvec)
+    detected_boxes, overlay_img = get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rvec, tvec)
+    
+    _, buffer = cv2.imencode(".jpg", overlay_img)
+
+    image_bytes = buffer.tobytes()
+    
     print(detected_boxes)
-    latest_img = base64.b64encode(file_bytes).decode('utf-8')
+    latest_img = base64.b64encode(image_bytes).decode('utf-8')
     
     return jsonify({"message": "OK"}), 200
 
@@ -181,37 +181,13 @@ def index():
 
 @app.route('/api/cam', methods=['GET'])
 def get_image():
-    global current_gripper_position_in_world, current_gripper_position_in_arm, detected_boxes, translation, system_angle, latest_img
     # global latest_img, detected_boxes
-    current_gripper_position_in_world = np.zeros(3)
-    latest_img = None
-    detected_boxes = None
+    # latest_img = None
+    # detected_boxes = None
     
-    # if ser and ser.is_open:
-    #     command = f"take_photo:{get_local_ip()}\n"
-    #     ser.write(command.encode())
-    
-    img = cv2.imread(LATEST_IMAGE_PATH)
-    
-    _, camera_position, coordinate_systems_angle, R, rvec, tvec = get_camera_position(img, get_marker_positions(MARKER_SIZE, MARKER_SPACING), MARKER_SIZE)
-    if(camera_position is None):
-        return jsonify({"error": "No aruco board"}), 400
-
-    print("Coordinate systems angle: ", np.degrees(coordinate_systems_angle))
-    current_gripper_position_in_world = conv_camera_coords_to_gripper_coords(camera_position, world_angles, coordinate_systems_angle)
-    arm_angle = np.arctan2(current_gripper_position_in_arm[1], current_gripper_position_in_arm[0])
-    print("Arm angle: ", np.degrees(arm_angle))
-    system_angle = coordinate_systems_angle-arm_angle
-    
-    translation = get_translation(current_gripper_position_in_world, current_gripper_position_in_arm, system_angle)
-    
-    camera_matrix, dist_coeffs = get_camera_matrix_and_dist_coeffs()
-    
-    detected_boxes = get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rvec, tvec)
-    print(detected_boxes)
-    success, file_bytes = cv2.imencode(".jpg", img)
-    latest_img = base64.b64encode(file_bytes).decode('utf-8')
-    print(type(latest_img))
+    if ser and ser.is_open:
+        command = f"take_photo:{get_local_ip()}\n"
+        ser.write(command.encode())
     
     return jsonify({'success': True})
 
@@ -293,7 +269,16 @@ def status():
     
 @app.route('/api/connect', methods=['POST'])
 def connect():
-    global ser, current_port, current_gripper_position_in_arm
+    global ser, current_port, current_gripper_position_in_arm, system_angle, translation, current_gripper_position_in_world, detected_boxes, latest_img, server_ip
+    
+    translation = None
+    system_angle = None
+    world_angles = get_initial_angles()
+    current_gripper_position_in_world = np.zeros(3)
+    current_gripper_position_in_arm, _ = get_gripper_coords_and_cam_rotation_from_arm(world_angles)
+    detected_boxes = None
+    latest_img = None
+    server_ip = None
     
     try:
         data = request.json

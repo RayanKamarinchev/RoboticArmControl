@@ -239,7 +239,8 @@ def get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rve
         if box_code_info is None:
             continue
         
-        cuboid_height = get_height_from_box_code(box_code_info["corners"], camera_matrix, dist_coeffs, camera_position, R)
+        cuboid_height = get_height_from_box_code(box_code_info["corners"], new_camera_matrix, dist_coeffs, camera_position, R)
+        # cuboid_height = 0.05
         print("Cuboid height:", cuboid_height)
         print("Box id:", box_code_info["id"])
 
@@ -248,5 +249,5 @@ def get_box_coordinates(img, camera_position, R, camera_matrix, dist_coeffs, rve
         grab_point, width, length = get_cuboid_info(top_side_world_points)
         boxes_info.append(Box(box_code_info["id"], grab_point, width, length, cuboid_height))
         
-    return boxes_info
+    return boxes_info, overlay
     
